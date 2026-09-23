@@ -31,7 +31,17 @@ export function createServer(backend) {
     const [client, capabilities, world] = await Promise.all([
       backend.call('mc.client.state'), backend.call('mc.debug.capabilities'), backend.call('mc.world.snapshot')
     ]);
-    return textResult({ status: world.inWorld ? 'available' : 'not_in_world', client, capabilities, world });
+    let dune = { status: 'not_in_world' };
+    if (world.inWorld) {
+      try {
+        dune = await backend.call('mc.server.call', {
+          tool: 'mc.dune.world.status', arguments: {}, timeoutMs: 10000
+        }, 15000);
+      } catch (error) {
+        dune = { status: serverToolErrorStatus(error, 'mc.dune.world.status'), message: error.message };
+      }
+    }
+    return textResult({ status: world.inWorld ? 'available' : 'not_in_world', client, capabilities, world, dune });
   }));
 
   server.registerTool('get_player_state', {
@@ -50,6 +60,23 @@ export function createServer(backend) {
     inputSchema: z.object({ x: coord, y: coord, z: coord }),
     annotations: { readOnlyHint: true }
   }, guarded(async ({ x, y, z }) => textResult(await backend.call('mc.block.state', { x, y, z }))));
+
+  server.registerTool('inspect_terrain_column', {
+    description: 'Read Dune generator diagnostics for one column in the connected player dimension. The result distinguishes analytical prediction from loaded blocks.',
+    inputSchema: z.object({ x: coord, y: coord, z: coord }),
+    annotations: { readOnlyHint: true }
+  }, guarded(async ({ x, y, z }) => {
+    let result;
+    try {
+      result = await backend.call('mc.server.call', {
+        tool: 'mc.dune.terrain.column', arguments: { x, y, z }, timeoutMs: 10000
+      }, 15000);
+    } catch (error) {
+      error.code = serverToolErrorStatus(error, 'mc.dune.terrain.column');
+      throw error;
+    }
+    return textResult(result, result.status !== 'available');
+  }));
 
   server.registerTool('capture_screenshot', {
     description: 'Capture the visible Minecraft client frame and return PNG image content with camera metadata.',
@@ -84,4 +111,10 @@ export function createServer(backend) {
   }));
 
   return server;
+}
+
+function serverToolErrorStatus(error, tool) {
+  if (error.code === 'client_tool_error' && error.message.includes(`Unknown tool: ${tool}`)) return 'dune_unavailable';
+  if (error.code === 'client_tool_error' && error.message.includes('server MCP is not available')) return 'server_unavailable';
+  return error.code ?? 'observation_error';
 }

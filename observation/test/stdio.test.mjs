@@ -34,6 +34,7 @@ test('real MCP stdio client sees only observation tools and receives structured 
   await mkdir(join(gameDir, 'screenshots'));
   await writeFile(join(gameDir, 'screenshots', 'test.png'), tinyPng);
   const calls = [];
+  let duneAvailable = true;
   const http = createHttpServer(async (request, response) => {
     assert.equal(request.method, 'POST');
     assert.equal(request.headers.authorization, 'Bearer local-test-token');
@@ -43,12 +44,24 @@ test('real MCP stdio client sees only observation tools and receives structured 
     assert.equal(rpc.method, 'tools/call');
     calls.push(rpc.params.name);
     const name = rpc.params.name;
+    if (name === 'mc.server.call') {
+      assert.ok(['mc.dune.world.status', 'mc.dune.terrain.column'].includes(rpc.params.arguments.tool));
+      assert.deepEqual(rpc.params.arguments.arguments, rpc.params.arguments.tool === 'mc.dune.world.status' ? {} : { x: 1, y: 80, z: 2 });
+      if (rpc.params.arguments.tool === 'mc.dune.terrain.column' && !duneAvailable) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, error: { code: -32603, message: 'Unknown tool: mc.dune.terrain.column' } }));
+        return;
+      }
+    }
     const result = {
       'mc.client.state': { running: true, inWorld: true, rawInWorld: true, playerName: 'Tester', position: { x: 1, y: 80, z: 2 }, rotation: { yaw: 90, pitch: 5 } },
       'mc.player.state': { running: true, inWorld: true, rawInWorld: true, playerName: 'Tester', position: { x: 1, y: 80, z: 2 }, rotation: { yaw: 90, pitch: 5 } },
       'mc.debug.capabilities': { loader: 'neoforge', minecraftVersion: '1.21.1' },
       'mc.world.snapshot': { inWorld: true, dimension: 'minecraft:overworld', gameTime: 120 },
       'mc.block.state': { status: 'loaded', dimension: 'minecraft:overworld', x: 1, y: 80, z: 2, block: 'minecraft:oak_stairs', properties: { facing: 'north', half: 'bottom' } },
+      'mc.server.call': rpc.params.arguments.tool === 'mc.dune.world.status'
+        ? { status: 'available', minecraft_version: '1.21.1', neoforge_version: '21.1.248', dune_version: '0.6.0-dev.4', dimension: 'minecraft:overworld', world_seed: 0, terrain_profile: '6000', terrain_algorithm_revision: 4 }
+        : { status: 'available', dimension: 'minecraft:overworld', x: 1, y: 80, z: 2, analytical: { source: 'analytical_generator_prediction', raw_rock_roof: 64 }, loaded_world: { status: 'unloaded' } },
       'mc.screenshot.take': { status: 'saved', path: 'screenshots/test.png', absolutePath: join(gameDir, 'screenshots', 'test.png'), width: 1, height: 1, timestamp: '2026-09-23T00:00:00Z', dimension: 'minecraft:overworld', position: { x: 1, y: 80, z: 2 }, rotation: { yaw: 90, pitch: 5 }, fov: 70 }
     }[name];
     assert.ok(result, `unexpected internal tool ${name}`);
@@ -63,14 +76,23 @@ test('real MCP stdio client sees only observation tools and receives structured 
   try {
     const definitions = (await client.listTools()).tools;
     const tools = definitions.map(tool => tool.name).sort();
-    assert.deepEqual(tools, ['capture_screenshot', 'get_player_state', 'get_world_status', 'inspect_loaded_block']);
+    assert.deepEqual(tools, ['capture_screenshot', 'get_player_state', 'get_world_status', 'inspect_loaded_block', 'inspect_terrain_column']);
     assert.equal(definitions.find(tool => tool.name === 'inspect_loaded_block').annotations.readOnlyHint, true);
     assert.equal(definitions.find(tool => tool.name === 'capture_screenshot').annotations.readOnlyHint, false);
-    assert.equal(payload(await client.callTool({ name: 'get_world_status' })).status, 'available');
+    const status = payload(await client.callTool({ name: 'get_world_status' }));
+    assert.equal(status.status, 'available');
+    assert.equal(status.dune.dune_version, '0.6.0-dev.4');
     assert.equal(payload(await client.callTool({ name: 'get_player_state' })).dimension, 'minecraft:overworld');
     const block = payload(await client.callTool({ name: 'inspect_loaded_block', arguments: { x: 1, y: 80, z: 2 } }));
     assert.equal(block.block, 'minecraft:oak_stairs');
     assert.deepEqual(block.properties, { facing: 'north', half: 'bottom' });
+    const terrain = payload(await client.callTool({ name: 'inspect_terrain_column', arguments: { x: 1, y: 80, z: 2 } }));
+    assert.equal(terrain.analytical.raw_rock_roof, 64);
+    assert.equal(terrain.loaded_world.status, 'unloaded');
+    duneAvailable = false;
+    const unavailable = await client.callTool({ name: 'inspect_terrain_column', arguments: { x: 1, y: 80, z: 2 } });
+    assert.equal(unavailable.isError, true);
+    assert.equal(payload(unavailable).status, 'dune_unavailable');
     const screenshot = await client.callTool({ name: 'capture_screenshot' });
     assert.equal(screenshot.content[1].type, 'image');
     assert.equal(screenshot.content[1].mimeType, 'image/png');
@@ -80,7 +102,7 @@ test('real MCP stdio client sees only observation tools and receives structured 
     const invalid = await client.callTool({ name: 'inspect_loaded_block', arguments: { x: 'bad', y: 80, z: 2 } });
     assert.equal(invalid.isError, true);
     assert.equal(calls.filter(name => name === 'mc.block.state').length, 1);
-    assert.deepEqual([...new Set(calls)].sort(), ['mc.block.state', 'mc.client.state', 'mc.debug.capabilities', 'mc.player.state', 'mc.screenshot.take', 'mc.world.snapshot']);
+    assert.deepEqual([...new Set(calls)].sort(), ['mc.block.state', 'mc.client.state', 'mc.debug.capabilities', 'mc.player.state', 'mc.screenshot.take', 'mc.server.call', 'mc.world.snapshot']);
   } finally {
     await client.close();
     await new Promise(resolveClose => http.close(resolveClose));
@@ -91,7 +113,7 @@ test('MCP discovery works while Minecraft is unavailable and reports failure on 
   const missing = join(tmpdir(), `missing-minecraft-${process.pid}`, 'mcp', 'server.json');
   const client = await connect(missing);
   try {
-    assert.equal((await client.listTools()).tools.length, 4);
+    assert.equal((await client.listTools()).tools.length, 5);
     const result = await client.callTool({ name: 'get_world_status' });
     assert.equal(result.isError, true);
     assert.equal(payload(result).status, 'minecraft_unavailable');

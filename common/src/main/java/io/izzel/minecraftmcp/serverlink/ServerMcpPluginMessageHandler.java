@@ -15,15 +15,22 @@ public final class ServerMcpPluginMessageHandler {
         this.tools = tools;
     }
 
-    @SuppressWarnings("unchecked")
     public void receive(String payload, Sender sender) {
+        receive(payload, sender, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    public void receive(String payload, Sender sender, String playerUuid) {
         Object parsed = Json.parse(payload);
         if (!(parsed instanceof Map<?, ?> raw)) return;
         Map<String, Object> message = (Map<String, Object>) raw;
         if (!"request".equals(String.valueOf(message.get("type")))) return;
         Object id = message.get("id");
         String tool = String.valueOf(message.get("tool"));
-        Map<String, Object> arguments = message.get("arguments") instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+        Map<String, Object> supplied = message.get("arguments") instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+        Map<String, Object> arguments = new LinkedHashMap<>(supplied);
+        arguments.remove("$mcpPlayerUuid");
+        if (playerUuid != null) arguments.put("$mcpPlayerUuid", playerUuid);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("type", "response");
         response.put("id", id);

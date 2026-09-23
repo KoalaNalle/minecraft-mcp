@@ -86,7 +86,7 @@ public final class NeoForgeMinecraftMcpMod {
         var registrar = event.registrar("1").optional();
         registrar.playToServer(NeoForgeStringPayload.REQUEST, NeoForgeStringPayload.codec(NeoForgeStringPayload.REQUEST), (payload, context) -> {
             if (pluginHandler != null) {
-                pluginHandler.receive(payload.text(), response -> context.reply(new NeoForgeStringPayload(NeoForgeStringPayload.RESPONSE, response)));
+                pluginHandler.receive(payload.text(), response -> context.reply(new NeoForgeStringPayload(NeoForgeStringPayload.RESPONSE, response)), context.player().getUUID().toString());
             }
         });
         registrar.playToClient(NeoForgeStringPayload.RESPONSE, NeoForgeStringPayload.codec(NeoForgeStringPayload.RESPONSE), (payload, context) -> NeoForgeBridge.SERVER_PROXY.receive(payload.text()));
@@ -100,6 +100,7 @@ public final class NeoForgeMinecraftMcpMod {
             server = MinecraftMcpBootstrap.start(bridge);
             ToolRegistry pluginRegistry = new ToolRegistry();
             BuiltinServerTools.register(pluginRegistry, bridge);
+            DuneTerrainTools.registerIfPresent(pluginRegistry, event.getServer());
             pluginHandler = new ServerMcpPluginMessageHandler(pluginRegistry);
             event.getServer().getPlayerList().getPlayers().forEach(player -> PacketDistributor.sendToPlayer(player, new NeoForgeStringPayload(NeoForgeStringPayload.HELLO, ServerMcpProxy.hello())));
             System.out.println("[Minecraft MCP] NeoForge dedicated MCP server started on port " + server.port());
@@ -322,7 +323,12 @@ public final class NeoForgeMinecraftMcpMod {
             if (server == null) throw new IllegalStateException("server MCP is not available");
             ToolRegistry registry = new ToolRegistry();
             BuiltinServerTools.register(registry, new NeoForgeServerBridge(server));
-            return registry.call(tool, arguments);
+            DuneTerrainTools.registerIfPresent(registry, server);
+            java.util.Map<String, Object> trustedArguments = new java.util.LinkedHashMap<>(arguments);
+            trustedArguments.remove("$mcpPlayerUuid");
+            java.util.UUID playerUuid = submit(() -> mc.player == null ? null : mc.player.getUUID()).get(10, java.util.concurrent.TimeUnit.SECONDS);
+            if (playerUuid != null) trustedArguments.put("$mcpPlayerUuid", playerUuid.toString());
+            return registry.call(tool, trustedArguments);
         }
 
 
