@@ -12,13 +12,13 @@ const observationRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const stdioPath = join(observationRoot, 'src', 'stdio.mjs');
 const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', 'base64');
 
-async function connect(discoveryPath) {
+async function connect(discoveryPath, profile = 'observation') {
   const client = new Client({ name: 'observation-protocol-test', version: '1.0.0' });
   await client.connect(new StdioClientTransport({
     command: process.execPath,
     args: [stdioPath],
     cwd: observationRoot,
-    env: { ...process.env, MINECRAFT_MCP_DISCOVERY: discoveryPath }
+    env: { ...process.env, MINECRAFT_MCP_DISCOVERY: discoveryPath, MINECRAFT_MCP_PROFILE: profile }
   }));
   return client;
 }
@@ -35,6 +35,11 @@ test('real MCP stdio client sees only observation tools and receives structured 
   await writeFile(join(gameDir, 'screenshots', 'test.png'), tinyPng);
   const calls = [];
   let duneAvailable = true;
+  let cameraMoveRequested = false;
+  const cameras = [
+    { name: 'Original', dimension: 'minecraft:overworld', x: 1, y: 80, z: 2, yaw: 90, pitch: 5 },
+    { name: 'Far', dimension: 'minecraft:overworld', x: 10, y: 90, z: 20, yaw: -45, pitch: 10 }
+  ];
   const http = createHttpServer(async (request, response) => {
     assert.equal(request.method, 'POST');
     assert.equal(request.headers.authorization, 'Bearer local-test-token');
@@ -44,6 +49,7 @@ test('real MCP stdio client sees only observation tools and receives structured 
     assert.equal(rpc.method, 'tools/call');
     calls.push(rpc.params.name);
     const name = rpc.params.name;
+    if (name === 'mc.dune.camera.goto') cameraMoveRequested = true;
     if (name === 'mc.server.call') {
       assert.ok(['mc.dune.world.status', 'mc.dune.terrain.column'].includes(rpc.params.arguments.tool));
       assert.deepEqual(rpc.params.arguments.arguments, rpc.params.arguments.tool === 'mc.dune.world.status' ? {} : { x: 1, y: 80, z: 2 });
@@ -55,10 +61,13 @@ test('real MCP stdio client sees only observation tools and receives structured 
     }
     const result = {
       'mc.client.state': { running: true, inWorld: true, rawInWorld: true, playerName: 'Tester', position: { x: 1, y: 80, z: 2 }, rotation: { yaw: 90, pitch: 5 } },
-      'mc.player.state': { running: true, inWorld: true, rawInWorld: true, playerName: 'Tester', position: { x: 1, y: 80, z: 2 }, rotation: { yaw: 90, pitch: 5 } },
+      'mc.player.state': { running: true, inWorld: true, rawInWorld: true, playerName: 'Tester', position: cameraMoveRequested ? { x: 10, y: 90, z: 20 } : { x: 1, y: 80, z: 2 }, rotation: cameraMoveRequested ? { yaw: -45, pitch: 10 } : { yaw: 90, pitch: 5 } },
       'mc.debug.capabilities': { loader: 'neoforge', minecraftVersion: '1.21.1' },
       'mc.world.snapshot': { inWorld: true, dimension: 'minecraft:overworld', gameTime: 120 },
       'mc.block.state': { status: 'loaded', dimension: 'minecraft:overworld', x: 1, y: 80, z: 2, block: 'minecraft:oak_stairs', properties: { facing: 'north', half: 'bottom' } },
+      'mc.region.inspect': { status: 'partial', source: 'client_loaded_world', dimension: 'minecraft:overworld', volume: 2, loaded_count: 1, unloaded_count: 1, cells: [{ x: 1, y: 80, z: 2, status: 'loaded', block: 'minecraft:oak_stairs', properties: { facing: 'north' } }, { x: 2, y: 80, z: 2, status: 'unloaded' }] },
+      'mc.dune.camera.list': { status: 'available', cameras },
+      'mc.dune.camera.goto': { status: 'teleport_requested', accepted: true, camera: cameras[1] },
       'mc.server.call': rpc.params.arguments.tool === 'mc.dune.world.status'
         ? { status: 'available', minecraft_version: '1.21.1', neoforge_version: '21.1.248', dune_version: '0.6.0-dev.4', dimension: 'minecraft:overworld', world_seed: 0, terrain_profile: '6000', terrain_algorithm_revision: 4 }
         : { status: 'available', dimension: 'minecraft:overworld', x: 1, y: 80, z: 2, analytical: { source: 'analytical_generator_prediction', raw_rock_roof: 64 }, loaded_world: { status: 'unloaded' } },
@@ -76,7 +85,7 @@ test('real MCP stdio client sees only observation tools and receives structured 
   try {
     const definitions = (await client.listTools()).tools;
     const tools = definitions.map(tool => tool.name).sort();
-    assert.deepEqual(tools, ['capture_screenshot', 'get_player_state', 'get_world_status', 'inspect_loaded_block', 'inspect_terrain_column']);
+    assert.deepEqual(tools, ['capture_screenshot', 'get_player_state', 'get_world_status', 'inspect_loaded_block', 'inspect_region', 'inspect_terrain_column']);
     assert.equal(definitions.find(tool => tool.name === 'inspect_loaded_block').annotations.readOnlyHint, true);
     assert.equal(definitions.find(tool => tool.name === 'capture_screenshot').annotations.readOnlyHint, false);
     const status = payload(await client.callTool({ name: 'get_world_status' }));
@@ -86,6 +95,12 @@ test('real MCP stdio client sees only observation tools and receives structured 
     const block = payload(await client.callTool({ name: 'inspect_loaded_block', arguments: { x: 1, y: 80, z: 2 } }));
     assert.equal(block.block, 'minecraft:oak_stairs');
     assert.deepEqual(block.properties, { facing: 'north', half: 'bottom' });
+    const region = payload(await client.callTool({ name: 'inspect_region', arguments: { min: { x: 1, y: 80, z: 2 }, max: { x: 2, y: 80, z: 2 } } }));
+    assert.equal(region.status, 'partial');
+    assert.equal(region.unloaded_count, 1);
+    const oversized = await client.callTool({ name: 'inspect_region', arguments: { min: { x: 1, y: 80, z: 2 }, max: { x: 17, y: 80, z: 2 } } });
+    assert.equal(oversized.isError, true);
+    assert.equal(calls.filter(name => name === 'mc.region.inspect').length, 1);
     const terrain = payload(await client.callTool({ name: 'inspect_terrain_column', arguments: { x: 1, y: 80, z: 2 } }));
     assert.equal(terrain.analytical.raw_rock_roof, 64);
     assert.equal(terrain.loaded_world.status, 'unloaded');
@@ -99,10 +114,26 @@ test('real MCP stdio client sees only observation tools and receives structured 
     assert.deepEqual(Buffer.from(screenshot.content[1].data, 'base64'), tinyPng);
     assert.equal(payload(screenshot).dimension, 'minecraft:overworld');
     assert.equal(payload(screenshot).absolutePath, undefined);
+    assert.equal(payload(screenshot).cameraPreset, 'Original');
     const invalid = await client.callTool({ name: 'inspect_loaded_block', arguments: { x: 'bad', y: 80, z: 2 } });
     assert.equal(invalid.isError, true);
     assert.equal(calls.filter(name => name === 'mc.block.state').length, 1);
-    assert.deepEqual([...new Set(calls)].sort(), ['mc.block.state', 'mc.client.state', 'mc.debug.capabilities', 'mc.player.state', 'mc.screenshot.take', 'mc.server.call', 'mc.world.snapshot']);
+    const development = await connect(discovery, 'development');
+    try {
+      const developmentTools = (await development.listTools()).tools;
+      assert.deepEqual(developmentTools.map(tool => tool.name).sort(), [...tools, 'go_to_saved_camera', 'list_saved_cameras'].sort());
+      assert.equal(developmentTools.find(tool => tool.name === 'go_to_saved_camera').annotations.readOnlyHint, false);
+      assert.equal(payload(await development.callTool({ name: 'list_saved_cameras' })).cameras.length, 2);
+      const arrival = payload(await development.callTool({ name: 'go_to_saved_camera', arguments: { name: 'Far' } }));
+      assert.equal(arrival.status, 'arrived');
+      assert.equal(arrival.completed, true);
+      assert.deepEqual(arrival.observed.player.position, { x: 10, y: 90, z: 20 });
+      assert.equal((await development.callTool({ name: 'go_to_saved_camera', arguments: { name: '../bad' } })).isError, true);
+      assert.equal(calls.filter(name => name === 'mc.dune.camera.goto').length, 1);
+    } finally {
+      await development.close();
+    }
+    assert.deepEqual([...new Set(calls)].sort(), ['mc.block.state', 'mc.client.state', 'mc.debug.capabilities', 'mc.dune.camera.goto', 'mc.dune.camera.list', 'mc.player.state', 'mc.region.inspect', 'mc.screenshot.take', 'mc.server.call', 'mc.world.snapshot']);
   } finally {
     await client.close();
     await new Promise(resolveClose => http.close(resolveClose));
@@ -113,7 +144,7 @@ test('MCP discovery works while Minecraft is unavailable and reports failure on 
   const missing = join(tmpdir(), `missing-minecraft-${process.pid}`, 'mcp', 'server.json');
   const client = await connect(missing);
   try {
-    assert.equal((await client.listTools()).tools.length, 5);
+    assert.equal((await client.listTools()).tools.length, 6);
     const result = await client.callTool({ name: 'get_world_status' });
     assert.equal(result.isError, true);
     assert.equal(payload(result).status, 'minecraft_unavailable');

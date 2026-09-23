@@ -161,6 +161,15 @@ public interface MinecraftClientBridge {
     default Map<String, Object> blockAt(int x, int y, int z) {
         throw new UnsupportedOperationException("Block query is not implemented by " + loader());
     }
+    default Map<String, Object> inspectRegion(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        throw new UnsupportedOperationException("Region query is not implemented by " + loader());
+    }
+    default Map<String, Object> listDuneCameras() {
+        return Map.of("status", "dune_unavailable");
+    }
+    default Map<String, Object> goToDuneCamera(String name) {
+        return Map.of("status", "dune_unavailable", "accepted", false);
+    }
     default Map<String, Object> moveWaypoints(List<Vec3> waypoints, boolean loop, int maxLoops, double tolerance, long timeoutMs, boolean sprint, boolean sneak, boolean controlView) {
         throw new UnsupportedOperationException("Waypoint movement is not implemented by " + loader());
     }

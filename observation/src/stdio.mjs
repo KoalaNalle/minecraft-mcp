@@ -10,4 +10,9 @@ if (!discovery) {
 }
 
 const backend = new MinecraftBackend(resolve(discovery));
-await serveStdio(() => createServer(backend));
+const profile = process.env.MINECRAFT_MCP_PROFILE || 'observation';
+if (!['observation', 'development'].includes(profile)) {
+  console.error('MINECRAFT_MCP_PROFILE must be observation or development.');
+  process.exit(2);
+}
+await serveStdio(() => createServer(backend, { profile }));

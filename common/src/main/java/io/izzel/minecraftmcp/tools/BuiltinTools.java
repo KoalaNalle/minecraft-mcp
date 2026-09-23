@@ -62,6 +62,17 @@ public final class BuiltinTools {
         registry.register(simple("mc.container.close", "Close the currently open container/menu", args -> bridge.submit(bridge::closeContainer).get(10, TimeUnit.SECONDS)));
         registry.register(simple("mc.hotbar.select", "Select a hotbar slot by zero-based index", args -> { int slot = ((Number) args.getOrDefault("slot", args.getOrDefault("index", 0))).intValue(); return bridge.submit(() -> bridge.selectHotbarSlot(slot)).get(10, TimeUnit.SECONDS); }));
         registry.register(simple("mc.block.state", "Get block state at coordinates", args -> { int x = ((Number) args.getOrDefault("x", 0)).intValue(); int y = ((Number) args.getOrDefault("y", 0)).intValue(); int z = ((Number) args.getOrDefault("z", 0)).intValue(); return bridge.submit(() -> bridge.blockAt(x, y, z)).get(10, TimeUnit.SECONDS); }));
+        registry.register(simple("mc.region.inspect", "Inspect at most 256 loaded client-world block positions without loading chunks", args -> {
+            int minX = requiredInt(args, "minX"), minY = requiredInt(args, "minY"), minZ = requiredInt(args, "minZ");
+            int maxX = requiredInt(args, "maxX"), maxY = requiredInt(args, "maxY"), maxZ = requiredInt(args, "maxZ");
+            return bridge.submit(() -> bridge.inspectRegion(minX, minY, minZ, maxX, maxY, maxZ)).get(10, TimeUnit.SECONDS);
+        }));
+        registry.register(simple("mc.dune.camera.list", "List Dune saved diagnostic cameras if installed", args -> bridge.submit(bridge::listDuneCameras).get(10, TimeUnit.SECONDS)));
+        registry.register(simple("mc.dune.camera.goto", "Request a Dune saved diagnostic camera if installed", args -> {
+            Object name = args.get("name");
+            if (!(name instanceof String text) || !text.matches("[A-Za-z0-9._-]{1,64}")) throw new IllegalArgumentException("name must be a saved camera name");
+            return bridge.submit(() -> bridge.goToDuneCamera(text)).get(10, TimeUnit.SECONDS);
+        }));
         registry.register(simple("mc.packet.recording.start", "Start client packet recording", bridge::startPacketRecording));
         registry.register(simple("mc.packet.recording.stop", "Stop client packet recording", args -> bridge.stopPacketRecording()));
         registry.register(simple("mc.packet.recording.clear", "Clear recorded packets", args -> bridge.clearPacketRecording()));
@@ -102,6 +113,13 @@ public final class BuiltinTools {
     private static double number(Object value, String name) {
         if (!(value instanceof Number number)) throw new IllegalArgumentException(name + " must be a number");
         return number.doubleValue();
+    }
+    private static int requiredInt(Map<String,Object> args, String name) {
+        Object value = args.get(name);
+        if (!(value instanceof Number number) || number.doubleValue() != number.intValue()) {
+            throw new IllegalArgumentException(name + " must be an integer");
+        }
+        return number.intValue();
     }
     private static int slot(Map<String,Object> args) {
         Object value = args.get("slot");

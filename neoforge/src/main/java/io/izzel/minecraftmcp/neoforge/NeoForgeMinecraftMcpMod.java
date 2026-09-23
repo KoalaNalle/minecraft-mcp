@@ -681,6 +681,79 @@ public final class NeoForgeMinecraftMcpMod {
         }
 
         @Override
+        public Map<String, Object> inspectRegion(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+            long width = (long) maxX - minX + 1L;
+            long height = (long) maxY - minY + 1L;
+            long length = (long) maxZ - minZ + 1L;
+            if (width < 1 || height < 1 || length < 1 || width > 16 || height > 16 || length > 16
+                    || width * height * length > 256
+                    || Math.abs((long) minX) > 30000000 || Math.abs((long) maxX) > 30000000
+                    || Math.abs((long) minY) > 30000000 || Math.abs((long) maxY) > 30000000
+                    || Math.abs((long) minZ) > 30000000 || Math.abs((long) maxZ) > 30000000) {
+                throw new IllegalArgumentException("region must have ordered bounds, sides <= 16, and volume <= 256");
+            }
+            java.util.Map<String, Object> bounds = Map.of(
+                    "min", Map.of("x", minX, "y", minY, "z", minZ),
+                    "max", Map.of("x", maxX, "y", maxY, "z", maxZ));
+            if (mc.level == null) return Map.of("status", "not_in_world", "bounds", bounds);
+            java.util.List<Map<String, Object>> cells = new java.util.ArrayList<>();
+            java.util.Map<String, Integer> palette = new java.util.TreeMap<>();
+            int loaded = 0, unloaded = 0, outsideHeight = 0;
+            for (int dy = 0; dy < height; dy++) {
+                for (int dz = 0; dz < length; dz++) {
+                    for (int dx = 0; dx < width; dx++) {
+                        int x = minX + dx, y = minY + dy, z = minZ + dz;
+                        Map<String, Object> cell = blockAt(x, y, z);
+                        cells.add(cell);
+                        switch (String.valueOf(cell.get("status"))) {
+                            case "loaded" -> {
+                                loaded++;
+                                palette.merge(String.valueOf(cell.get("block")), 1, Integer::sum);
+                            }
+                            case "unloaded" -> unloaded++;
+                            case "out_of_build_height" -> outsideHeight++;
+                            default -> throw new IllegalStateException("Unexpected block status: " + cell.get("status"));
+                        }
+                    }
+                }
+            }
+            java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+            result.put("status", unloaded == 0 && outsideHeight == 0 ? "loaded" : loaded == 0 && outsideHeight == 0 ? "unloaded" : "partial");
+            result.put("source", "client_loaded_world");
+            result.put("dimension", mc.level.dimension().location().toString());
+            result.put("bounds", bounds);
+            result.put("volume", cells.size());
+            result.put("loaded_count", loaded);
+            result.put("unloaded_count", unloaded);
+            result.put("out_of_build_height_count", outsideHeight);
+            result.put("block_palette", palette);
+            result.put("cells", cells);
+            return result;
+        }
+
+        @Override
+        public Map<String, Object> listDuneCameras() {
+            return duneCameraMethod("mcpListCameras", new Class<?>[0]);
+        }
+
+        @Override
+        public Map<String, Object> goToDuneCamera(String name) {
+            return duneCameraMethod("mcpGoToCamera", new Class<?>[]{String.class}, name);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> duneCameraMethod(String method, Class<?>[] parameterTypes, Object... args) {
+            try {
+                Class<?> cameraApi = Class.forName("com.blackenter.minecraftdune.client.debug.DebugCameraClientCommands");
+                return (Map<String, Object>) cameraApi.getMethod(method, parameterTypes).invoke(null, args);
+            } catch (ClassNotFoundException | NoSuchMethodException unavailable) {
+                return Map.of("status", "dune_unavailable", "accepted", false);
+            } catch (ReflectiveOperationException failure) {
+                throw new IllegalStateException("Dune camera diagnostic call failed: " + failure.getMessage(), failure);
+            }
+        }
+
+        @Override
         public Map<String, Object> exportSchematic(Map<String, Object> args) {
             return submit(() -> {
                 if (mc.level == null) return java.util.Map.<String, Object>of("status", "no_world");
