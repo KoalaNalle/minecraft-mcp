@@ -439,7 +439,11 @@ public final class FabricMinecraftMcpEntrypoint implements ClientModInitializer 
         }
         public void leaveWorldToTitle() {
             if (mc.level != null) {
-                mc.disconnect(new GenericMessageScreen(Component.translatable("menu.savingLevel")));
+                mc.level.disconnect();
+                // The generic saving screen always renders the panorama during
+                // Minecraft.disconnect's forced tick, which can stall headless GL.
+                mc.disconnect();
+                mc.setScreen(new TitleScreen());
             }
         }
         public Map<String, Object> worldSnapshot() {
