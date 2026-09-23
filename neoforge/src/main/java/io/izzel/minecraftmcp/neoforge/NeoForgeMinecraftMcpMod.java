@@ -68,7 +68,8 @@ import net.minecraft.world.level.WorldDataConfiguration;
 
 @Mod("minecraft_mcp")
 public final class NeoForgeMinecraftMcpMod {
-    private static LocalHttpMcpServer server;
+    private static LocalHttpMcpServer clientHttpServer;
+    private static LocalHttpMcpServer dedicatedHttpServer;
     private static ServerMcpPluginMessageHandler pluginHandler;
     public NeoForgeMinecraftMcpMod(IEventBus modBus) {
         modBus.addListener(this::registerPayloads);
@@ -76,8 +77,8 @@ public final class NeoForgeMinecraftMcpMod {
         NeoForge.EVENT_BUS.addListener(this::onServerStopping);
         if (FMLLoader.getDist().isClient()) {
             try {
-                server = MinecraftMcpBootstrap.start(new NeoForgeBridge());
-                System.out.println("[Minecraft MCP] NeoForge MCP server started on port " + server.port());
+                clientHttpServer = MinecraftMcpBootstrap.start(new NeoForgeBridge());
+                System.out.println("[Minecraft MCP] NeoForge client MCP server started on port " + clientHttpServer.port());
             } catch (Exception e) { throw new RuntimeException("Failed to start Minecraft MCP", e); }
         }
     }
@@ -97,20 +98,28 @@ public final class NeoForgeMinecraftMcpMod {
         if (!event.getServer().isDedicatedServer()) return;
         try {
             NeoForgeServerBridge bridge = new NeoForgeServerBridge(event.getServer());
-            server = MinecraftMcpBootstrap.start(bridge);
+            dedicatedHttpServer = MinecraftMcpBootstrap.start(bridge);
             ToolRegistry pluginRegistry = new ToolRegistry();
             BuiltinServerTools.register(pluginRegistry, bridge);
             DuneTerrainTools.registerIfPresent(pluginRegistry, event.getServer());
             pluginHandler = new ServerMcpPluginMessageHandler(pluginRegistry);
             event.getServer().getPlayerList().getPlayers().forEach(player -> PacketDistributor.sendToPlayer(player, new NeoForgeStringPayload(NeoForgeStringPayload.HELLO, ServerMcpProxy.hello())));
-            System.out.println("[Minecraft MCP] NeoForge dedicated MCP server started on port " + server.port());
+            System.out.println("[Minecraft MCP] NeoForge dedicated MCP server started on port " + dedicatedHttpServer.port());
         } catch (Exception e) {
             throw new RuntimeException("Failed to start Minecraft MCP dedicated server", e);
         }
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
-        if (server != null) server.close();
+        // An integrated world stops its server when leaving to title, but the client
+        // observation endpoint must remain alive for the next world connection.
+        if (event.getServer().isDedicatedServer()) {
+            pluginHandler = null;
+            if (dedicatedHttpServer != null) {
+                dedicatedHttpServer.close();
+                dedicatedHttpServer = null;
+            }
+        }
     }
     static final class NeoForgeBridge implements MinecraftClientBridge {
         static final ServerMcpProxy SERVER_PROXY = new ServerMcpProxy();
@@ -318,9 +327,11 @@ public final class NeoForgeMinecraftMcpMod {
         }
         public boolean serverMcpAvailable() { return SERVER_PROXY.available() || mc.getSingleplayerServer() != null; }
         public Object serverMcpCall(String tool, Map<String, Object> arguments, long timeoutMs) throws Exception {
-            if (SERVER_PROXY.available()) return SERVER_PROXY.call(tool, arguments, text -> PacketDistributor.sendToServer(new NeoForgeStringPayload(NeoForgeStringPayload.REQUEST, text)), timeoutMs);
             var server = mc.getSingleplayerServer();
-            if (server == null) throw new IllegalStateException("server MCP is not available");
+            if (server == null) {
+                if (SERVER_PROXY.available()) return SERVER_PROXY.call(tool, arguments, text -> PacketDistributor.sendToServer(new NeoForgeStringPayload(NeoForgeStringPayload.REQUEST, text)), timeoutMs);
+                throw new IllegalStateException("server MCP is not available");
+            }
             ToolRegistry registry = new ToolRegistry();
             BuiltinServerTools.register(registry, new NeoForgeServerBridge(server));
             DuneTerrainTools.registerIfPresent(registry, server);
