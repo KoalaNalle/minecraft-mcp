@@ -151,14 +151,20 @@ public final class NeoForgeMinecraftMcpMod {
                 java.nio.file.Files.createDirectories(dir);
                 try (com.mojang.blaze3d.platform.NativeImage image = net.minecraft.client.Screenshot.takeScreenshot(mc.getMainRenderTarget())) {
                     image.writeToFile(target);
-                    return Map.of(
-                            "status", "saved",
-                            "path", gameDirectory().relativize(target).toString().replace('\\', '/'),
-                            "absolutePath", target.toString(),
-                            "width", image.getWidth(),
-                            "height", image.getHeight(),
-                            "bytes", java.nio.file.Files.size(target)
-                    );
+                    java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("status", "saved");
+                    result.put("path", gameDirectory().relativize(target).toString().replace('\\', '/'));
+                    result.put("absolutePath", target.toString());
+                    result.put("width", image.getWidth());
+                    result.put("height", image.getHeight());
+                    result.put("bytes", java.nio.file.Files.size(target));
+                    result.put("timestamp", java.time.Instant.now().toString());
+                    result.put("dimension", mc.level == null ? null : mc.level.dimension().location().toString());
+                    result.put("position", mc.player == null ? null : Map.of("x", mc.player.getX(), "y", mc.player.getY(), "z", mc.player.getZ()));
+                    result.put("rotation", mc.player == null ? null : Map.of("yaw", mc.player.getYRot(), "pitch", mc.player.getXRot()));
+                    result.put("cameraPreset", null);
+                    result.put("fov", mc.options.fov().get());
+                    return result;
                 }
             } catch (Exception e) {
                 throw new RuntimeException("Failed to take screenshot: " + e.getMessage(), e);
@@ -631,9 +637,26 @@ public final class NeoForgeMinecraftMcpMod {
             return map;
         }
         public Map<String, Object> blockAt(int x, int y, int z) {
-            if (mc.level == null) return Map.of("inWorld", false, "x", x, "y", y, "z", z);
-            BlockState state = mc.level.getBlockState(new net.minecraft.core.BlockPos(x, y, z));
-            return Map.of("inWorld", true, "x", x, "y", y, "z", z, "block", net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+            if (mc.level == null) return Map.of("status", "not_in_world", "inWorld", false, "x", x, "y", y, "z", z);
+            net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(x, y, z);
+            String dimension = mc.level.dimension().location().toString();
+            if (mc.level.isOutsideBuildHeight(pos)) return Map.of("status", "out_of_build_height", "inWorld", true, "dimension", dimension, "x", x, "y", y, "z", z);
+            if (!mc.level.hasChunkAt(pos)) return Map.of("status", "unloaded", "inWorld", true, "dimension", dimension, "x", x, "y", y, "z", z);
+            BlockState state = mc.level.getBlockState(pos);
+            java.util.Map<String, String> properties = new java.util.LinkedHashMap<>();
+            for (net.minecraft.world.level.block.state.properties.Property<?> property : state.getProperties()) {
+                properties.put(property.getName(), state.getValue(property).toString());
+            }
+            java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+            result.put("status", "loaded");
+            result.put("inWorld", true);
+            result.put("dimension", dimension);
+            result.put("x", x);
+            result.put("y", y);
+            result.put("z", z);
+            result.put("block", net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+            result.put("properties", properties);
+            return result;
         }
 
         @Override

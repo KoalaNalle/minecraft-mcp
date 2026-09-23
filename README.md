@@ -22,3 +22,5 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   http://127.0.0.1:$PORT/mcp
 ```
+
+For the local Codex observation-only stdio profile, see [docs/CODEX_OBSERVATION.md](docs/CODEX_OBSERVATION.md).
